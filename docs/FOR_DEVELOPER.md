@@ -13,7 +13,10 @@
   fix or separate application branch is planned. Review expected behavior with
   the wildcard policy and same-origin nginx deployment before updating tests.
 - Startup runs create_all, local schema upgrades and demo bootstrap. Configure
-  BOOTSTRAP_DEMO_DATA=false and ENABLE_INTERNAL_SCHEDULER=false on the server.
+  BOOTSTRAP_DEMO_DATA=false on the server. The developer must confirm
+  ENABLE_INTERNAL_SCHEDULER, AUTO_DEALLOCATE_HOUR (including server timezone), and
+  how the first administrator is created with demo bootstrap disabled. Deployment
+  does not force the scheduler off; one backend worker is planned.
   Schema changes still occur at startup; review migration/startup ownership separately.
 - Frontend: EligibleEmployeePicker.test.jsx fails the test named "employee picker
   is active immediately and progressively fetches with available criteria" because
@@ -26,9 +29,11 @@
 ## Temporary CI exceptions
 
 Only backend Black, Ruff and tests/test_cors.py; frontend Prettier, ESLint warnings
-and the specific employee-picker test above use continue-on-error. ESLint errors,
-other tests, dependency installation/audits, security checks, migrations and builds
+the specific employee-picker test above, and frontend npm audit use continue-on-error. ESLint errors,
+other tests, dependency installation, backend dependency audit, other security checks, migrations and builds
 remain blocking. Known-issue steps stay visible in Actions. Remove each exception
 after the developer fixes and verifies its issue; a green run includes these exceptions.
-Frontend coverage still requires the matching @vitest/coverage-v8 package recorded
-in VALIDATION.md; missing coverage tooling remains a blocking setup issue.
+Frontend @vitest/coverage-v8@2.1.9 is installed and committed separately with its
+lockfile. The owner reports 7 npm audit vulnerabilities, including 3 critical.
+Frontend audit remains visible as a non-blocking known issue pending developer
+triage and reviewed dependency updates. No npm audit fix was run.

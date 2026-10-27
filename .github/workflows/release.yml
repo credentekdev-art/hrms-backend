@@ -1,0 +1,115 @@
+name: Release
+on:
+  push:
+    branches: [develop, main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        type: choice
+        options: [staging, production]
+        required: true
+      ci_run_id:
+        description: Successful push CI run ID from this repository
+        type: string
+        required: true
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: release-${{ inputs.environment || github.ref_name }}
+  cancel-in-progress: false
+jobs:
+  validate:
+    if: ${{ github.repository == 'gaurav9075/hrms-backend' && !github.event.repository.fork && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') }}
+    timeout-minutes: 25
+    runs-on: ubuntu-24.04
+    outputs:
+      target: ${{ steps.validate.outputs.target }}
+      run_id: ${{ steps.validate.outputs.run_id }}
+      sha: ${{ steps.validate.outputs.sha }}
+      artifact: ${{ steps.validate.outputs.artifact }}
+    steps:
+      - name: Validate source CI and protected dispatch branch
+        id: validate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ inputs.ci_run_id }}
+          TARGET: ${{ inputs.environment }}
+          DISPATCH_REF: ${{ github.ref }}
+          EVENT: ${{ github.event_name }}
+          PUSH_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT" == push ]]; then
+            case "$DISPATCH_REF" in
+              refs/heads/develop) TARGET=staging ;;
+              refs/heads/main) TARGET=production ;;
+              *) exit 1 ;;
+            esac
+          fi
+          case "$TARGET" in
+            staging) branch=develop ;;
+            production) branch=main ;;
+            *) exit 1 ;;
+          esac
+          [[ "$DISPATCH_REF" == "refs/heads/$branch" ]]
+          if [[ "$EVENT" == push ]]; then
+            # Wait for this exact push's CI; the self-hosted runner remains idle.
+            RUN_ID=""
+            for attempt in $(seq 1 120); do
+              RUN_ID=$(gh api --method GET "repos/$REPO/actions/workflows/ci.yml/runs" \
+                -f event=push -f head_sha="$PUSH_SHA" -f branch="$branch" \
+                --jq '[.workflow_runs[] | select(.status == "completed")] | sort_by(.id) | last | .id // empty')
+              [[ -n "$RUN_ID" ]] && break
+              sleep 10
+            done
+          fi
+          [[ "$RUN_ID" =~ ^[0-9]+$ ]]
+          gh api "repos/$REPO/actions/runs/$RUN_ID" > run.json
+          jq -e --arg repo "$REPO" --arg branch "$branch" '
+            .repository.full_name == $repo and .head_repository.full_name == $repo
+            and .event == "push" and .status == "completed" and .conclusion == "success"
+            and .head_branch == $branch and .path == ".github/workflows/ci.yml"
+            and (.head_sha | test("^[a-f0-9]{40}$"))' run.json
+          sha=$(jq -r .head_sha run.json)
+          if [[ "$EVENT" == push ]]; then [[ "$sha" == "$PUSH_SHA" ]]; fi
+          echo "target=$TARGET" >> "$GITHUB_OUTPUT"
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+          artifact="backend-source-$sha"
+          gh api --paginate "repos/$REPO/actions/runs/$RUN_ID/artifacts" --jq '.artifacts[]' |
+            jq -s -e --arg name "$artifact" '[.[] | select(.name == $name and .expired == false)] | length == 1'
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "artifact=$artifact" >> "$GITHUB_OUTPUT"
+  deploy:
+    needs: validate
+    runs-on: [self-hosted, linux, hrms-deploy]
+    environment: ${{ needs.validate.outputs.target }}
+    if: ${{ needs.validate.result == 'success' && github.repository == 'gaurav9075/hrms-backend' && !github.event.repository.fork && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') }}
+    timeout-minutes: 30
+    steps:
+      - name: Require completed server setup and developer decisions
+        env:
+          READY: ${{ vars.DEPLOYMENT_READY }}
+        run: test "$READY" = true
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Download this repository's validated artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ needs.validate.outputs.run_id }}
+          ARTIFACT: ${{ needs.validate.outputs.artifact }}
+        run: |
+          set -eu
+          artifact_dir=$(mktemp -d "$RUNNER_TEMP/hrms-artifact.XXXXXX")
+          gh run download "$RUN_ID" --repo "$REPO" --name "$ARTIFACT" --dir "$artifact_dir"
+          echo "ARTIFACT_DIR=$artifact_dir" >> "$GITHUB_ENV"
+      - name: Deploy backend release
+        env:
+          TARGET: ${{ needs.validate.outputs.target }}
+          SOURCE_SHA: ${{ needs.validate.outputs.sha }}
+          CI_RUN_ID: ${{ needs.validate.outputs.run_id }}
+        run: /home/credentek/.pyenv/versions/3.10.14/bin/python deploy/scripts/deploy.py

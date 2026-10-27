@@ -1,212 +1,153 @@
-# HRMS resource management CI/CD
+# HRMS CI/CD and server deployment
 
-## Current status
+## Approved topology
 
-CI is implemented. Deployment is NOT implemented or enabled until server discovery
-confirms the operating system, SSH access, tools, database, addresses and free ports.
-The pipeline uses GitHub Actions. nginx will serve the frontend build, and a
-systemd service will run the backend from a release folder with its own Python
-virtual environment. nginx configuration, systemd units and executable deployment
-workflows have not been added. Blocking CI failures must be resolved before release. Temporary known-issue
-exceptions are listed in docs/FOR_DEVELOPER.md; their steps remain visible.
-TimeTracker is outside this project.
+Server: 192.168.0.188, Ubuntu 20.04, nginx 1.18. System Python remains 3.8.
+Python 3.10.14: /home/credentek/.pyenv/versions/3.10.14/bin/python.
+The administrator must confirm hrmsdeploy can traverse this path and execute it,
+including its shared libraries, before enabling deployment. Do not change system Python.
 
-## Pipeline
+| Environment | nginx | Backend | Service |
+|---|---|---|---|
+| staging | HTTP :8080 | 127.0.0.1:8001 | hrms-backend-staging.service |
+| production | HTTP :80 | 127.0.0.1:8002 | hrms-backend-production.service |
 
-```mermaid
-flowchart TD
-  A[Feature PR] --> B[Hosted CI: lint, format, tests, security]
-  B --> C[Merge to develop or main]
-  C --> D[Hosted CI saves artifacts identified by commit]
-  D --> E[Planned: manually dispatch Release in backend repo]
-  E --> F[Validate both successful push CI runs and exact commits]
-  F --> G[Production environment approval if main]
-  G --> H[Internal runner: backup database]
-  H --> I[Prepare backend release and Python virtual environment; run migrations]
-  I --> S[Switch backend release and restart systemd service]
-  S --> J[Backend health check]
-  J --> K[Publish selected frontend build to nginx release folder]
-  K --> L[Check frontend and API through nginx]
-```
+nginx serves /srv/hrms/<environment>/frontend/current with SPA fallback and
+preserves /api/v1 when proxying. The administrator installs the frontend repository's
+nginx configs and replaces the default port-80 page after validating nginx config.
+Ports must be checked before installation. nginx configuration and service units
+are root-owned; deployment jobs cannot edit them.
 
-## Release contract (to implement after discovery)
+hrmsdeploy owns /srv/hrms and runs both repository runners and both backend services.
+It has no general sudo. The backend deploy/sudoers/hrmsdeploy file permits only
+restarting the two exact backend services and reloading nginx. Status is permitted only with --no-pager for those two services; nginx -t is also
+permitted. No wildcard service arguments, shells, daemon-reload or file installation
+are permitted. An administrator
+installs units/configuration/sudoers, validates with visudo and nginx -t, and manages
+runner service installation. nginx needs traversal permission on static directory
+ancestors; shared directories remain private. Give hrmsdeploy no membership granting
+general sudo. Both runners share one identity and therefore trust boundary.
 
-One `Release` workflow in hrms-backend will use `workflow_dispatch` only. It will
-accept environment, backend CI run ID and frontend CI run ID. Staging accepts only
-successful push runs from develop; production accepts only successful push runs
-from main. Validate repository, CI workflow identity, event, conclusion, branch,
-full commit SHA and artifact name before downloading. Never accept PR artifacts.
-Use the same frontend artifact without rebuilding; VITE_API_URL=/api/v1 is public
-build configuration, never a secret. nginx routes /api/v1 to the environment backend.
+## Separate repository releases
 
-The backend GITHUB_TOKEN cannot read artifacts in another private repository.
-Without a GitHub App, use an expiring fine-grained token restricted to
-hrms-frontend, Actions: read, stored as FRONTEND_ARTIFACTS_TOKEN in each backend
-GitHub Environment. It is for reading artifacts, not cross-repo workflow triggering.
-Do not place it in source or print it. No automatic cross-repo triggering is planned.
+Each repository has its own Release workflow (manual dispatch or push to develop/main only) and downloads only its own
+successful push CI artifact with its repository-scoped GITHUB_TOKEN. No cross-repo
+token is needed. CI stays on GitHub-hosted runners. No PR jobs run on deployment runners.
 
-The single coordinator downloads both artifacts and deploys backend before frontend.
-Serialize each environment for the entire release, with cancel-in-progress: false.
-Use protected deployment workflow code; restrict staging to develop and production
-to main. Never run pull_request jobs on the deployment runner. Deployment jobs use
-[self-hosted, linux, hrms-deploy]. Production requires approval before any server mutation.
-Keep a release record mapping both commit SHAs and CI run IDs. Failed backend health
-checks stop frontend deployment. Frontend failure requires a deliberate recovery decision.
+1. Release backend first. Push-triggered releases wait for the exact push SHA's successful CI on a hosted runner. Select staging/develop or production/main and its CI run ID.
+2. Confirm the backend release succeeds and record the backend source SHA.
+3. Release frontend in the matching environment with its own CI run ID and that backend SHA.
+   For frontend push releases, set the environment variable BACKEND_RELEASE_SHA to
+   the approved, successfully deployed backend SHA before pushing. A missing or
+   mismatched value fails deployment. No cross-repository automatic trigger exists.
 
-## Proposed server layout
+The workflows validate repository, event, workflow path, successful conclusion,
+branch, SHA, artifact name and expiry. Never rebuild frontend during deployment.
+The frontend workflow checks the local backend success record and health under the
+same server-side environment lock used by backend deployment. The operator owns
+version compatibility and must not start another backend release between selecting
+versions and completing frontend release.
 
-```text
-/srv/hrms/{staging,production}/
-  frontend/releases/<release-id>/
-  frontend/current -> releases/<release-id>
-  backend/releases/<release-id>/
-    .venv/
-  backend/current -> releases/<release-id>
-  shared/backend.env
-  shared/data/
-  shared/backups/
-```
+In BOTH repos: Settings > Environments > create staging and production. Restrict
+staging to develop and production to main. Require production reviewers and prevent
+self-review where supported. Leave environment variable DEPLOYMENT_READY unset until
+server setup, backups, startup/migration behavior, scheduler and admin creation are
+confirmed. Then set it to true per environment. If required production approval is
+unavailable, leave production disabled. Protect main/develop with PR review and CI.
+Release workflows must be on the default branch before workflow_dispatch is available.
+Local changes have not been pushed; nothing here is installed or enabled on the server.
 
-Separate environment services, ports and databases. Backend ports are undecided
-until discovery. Backends should bind to loopback behind nginx. Retain five
-application releases; define database backup retention independently.
+## Runner registration: repeat for each repository
 
-Each backend release contains its application code and a Python virtual environment
-created at its final release path. Install backend dependencies into that environment.
-The environment-specific systemd service uses backend/current as its working directory,
-launches the server with backend/current/.venv/bin/python, and loads shared/backend.env.
-After migrations, switch backend/current to the prepared release and restart the service,
-then verify backend health before publishing the frontend. nginx serves frontend/current
-and forwards API requests to the backend loopback port. Virtual environments and
-environment files stay on the server and are excluded from Git and CI artifacts.
+Repository > Settings > Actions > Runners > New self-hosted runner > Linux > verified
+architecture. Use GitHub's current download and checksum instructions. Register as
+hrmsdeploy, never root. Use separate directories under /home/hrmsdeploy:
 
-## Server installation plan: Ubuntu 20.04
+| Repository | Directory | Runner name |
+|---|---|---|
+| hrms-backend | runners/backend | hrms-backend-188 |
+| hrms-frontend | runners/frontend | hrms-frontend-188 |
 
-Install nginx through apt. Install Python 3.10 alongside the system Python 3.8;
-keep /usr/bin/python3 and the operating system interpreter unchanged. Check apt
-package availability before choosing a Python source. If Python 3.10 packages are
-unavailable, use a verified CPython 3.10 source release with a dedicated /opt prefix
-and make altinstall. Do not assume an older third-party PPA still supports Focal.
-Use the explicit Python 3.10 executable to create each backend release's .venv.
-Development, CI, lint/format targets and backend services all use Python 3.10.
-Run installation commands one at a time after inspecting the previous result.
+Keep default self-hosted, linux and architecture labels; add hrms-deploy. Keep
+registration tokens private. The administrator installs each runner service to run
+as hrmsdeploy. Confirm both runners show Idle in their own repository. The runner
+requires git, gh, tar, Python 3.10 and outbound HTTPS through the proxy. Install
+these prerequisites before enabling releases. Restrict runner use to reviewed release
+workflows; protect workflow and deploy-script changes through CODEOWNERS/review.
 
-## Database and startup follow-up
+## Proxy
 
-Set BOOTSTRAP_DEMO_DATA=false and ENABLE_INTERNAL_SCHEDULER=false explicitly in
-both environments. All other required configuration must be supplied: blank values
-in .env.example are names to fill, not a runnable environment file. Use distinct
-strong SECRET_KEY values and separate DATABASE_URL values. CORS_ORIGINS is unused
-by the application CORS middleware; wildcard CORS is the accepted internal policy.
-Production uses same-origin /api/v1 through nginx.
-Do not introduce multiple scheduler workers accidentally. Decide the scheduled job
-strategy during server discovery.
+Direct GitHub connectivity has been confirmed; no proxy is configured in the
+server environment, apt or /etc/environment. Do not require proxy setup.
+deploy/runner-proxy.env.example is optional documentation only. Use it only if
+runner connectivity fails and testing confirms the proxy is needed. The workflows
+do not set proxy variables. Preserve direct connectivity by default.
 
-Startup still calls create_all, local schema upgrades and demo bootstrap. Demo data
-is disabled by configuration, but startup can still change schema. Follow-up:
-review all schema upgrades and move database mutations into explicit migration or
-administration commands, with separate approval. Until then, do not claim migrations
-are fully controlled or deploy overlapping application versions against one DB.
+If a proxy becomes necessary, merge the documented values into each runner's local
+.env without overwriting runner configuration, then have an administrator restart
+the runner services. GitHub's runner does not support IP/CIDR no_proxy entries;
+local health checks explicitly bypass proxies. Confirm shell settings with printenv
+http_proxy https_proxy no_proxy and test actual runner connectivity separately.
+Proxy reference: https://docs.github.com/en/actions/how-tos/manage-runners/use-proxy-servers
 
-Before production: determine current migration state and a safe baseline, rehearse
-migrations on a copy, take a database-native consistent backup and test restoration.
-The CI migration check uses fresh SQLite because current tests use SQLite. It does
-not establish compatibility with a different server database. Add matching database
-CI and a driver after discovery if required. Deploy backward-compatible schema
-changes so the previous application can still work. Never auto-downgrade a database.
+## Server-only environment and SQLite
 
-## Rollback (deployment commands pending discovery)
+Each environment uses /srv/hrms/<environment>/shared/backend.env, owned by hrmsdeploy,
+mode 0600. Generate a separate random SECRET_KEY on the server only; never put it
+in Git, workflow inputs, logs or artifacts. The repository contains no backend.env
+or secret-value template. Use DATABASE_URL=sqlite:////srv/hrms/<environment>/shared/data/hrms.sqlite3.
+BOOTSTRAP_DEMO_DATA=false is the approved deployment setting. The developer must
+confirm ENABLE_INTERNAL_SCHEDULER, AUTO_DEALLOCATE_HOUR and initial admin creation
+before deployment. No deployment default forces the scheduler off. CI independently
+turns it off for isolated tests. The service loads backend.env; do not echo it.
 
-Stop the release if migrations or health checks fail. Save logs without secrets.
-For frontend, switch current atomically to a retained release, validate nginx and
-reload it, then check frontend routing and API access. For backend, select the
-previous release folder with its existing Python virtual environment, switch
-backend/current to it, and restart the systemd service only if that release supports
-the migrated schema.
-Otherwise stop writes and use the tested database restore procedure with explicit
-approval; restoring a backup can lose newer data. Application rollback does not
-undo schema changes. Exact commands will be supplied after discovery.
+Each backend release gets its own .venv at its final release path, built with the
+explicit Python 3.10 interpreter. Release scripts require explicit scheduler values,
+back up existing SQLite through the SQLite backup API, run Alembic, switch current,
+restart systemd and check health. A fresh database has no backup until it exists.
+Startup still performs create_all/local schema upgrades: developer confirmation and
+a rehearsal on a database copy are required before DEPLOYMENT_READY is enabled.
+The service uses one worker. Determine server timezone and scheduled-job behavior
+with the developer. Do not assume migrations or schema changes are reversible.
 
-## GitHub setup checklist
+## Failure and rollback
 
-1. Keep both repositories private; create backend empty, without GitHub-generated files.
-2. Review local changes before staging. Never stage .env, venv, node_modules,
-   databases, backups or private keys. Backend .env.example has names only.
-3. Ask the owner before any git push. No commits or pushes have been made for this setup.
-4. Create main/develop for the new backend through an agreed initial commit process.
-   Frontend already has these branches. Work remains on feature/cicd-setup.
-5. Settings > Environments > New environment: create staging and production in
-   hrms-backend. Restrict deployment branches to develop/main respectively. Enable
-   required production reviewers and prevent self-review if supported by your plan.
-   If private-repo approval gates are unavailable, keep production deployment disabled
-   until a supported approval mechanism is agreed. Manual dispatch alone is not a gate.
-6. Add environment secrets under Settings > Environments > environment >
-   Environment secrets > Add secret. Add nonsecret configuration under variables.
-   Determine final SSH/database secret names only after discovery.
-7. Settings > Branches > Add branch protection rule: separately protect main and
-   develop in both repos. Require a pull request, one approval, status checks,
-   resolved conversations; disable force pushes and deletion. Require `Frontend CI`
-   in frontend and `Backend CI` in backend. Select them after a first CI run registers
-   the checks. Apply rules to administrators where supported; verify plan availability.
-8. Review Dependabot pull requests; action revisions are pinned to full commit SHAs.
-9. Notifications are deferred; no Slack/email credentials or outbound messaging added.
+Scripts retain existing files, releases and backups; they never delete old releases
+or overwrite an existing release directory. Retention cleanup is a separate future
+action. After switching releases, restart/reload or health-check failures automatically
+restore the previous release symlink, restart/reload, and check it again. The workflow
+still fails so the operator sees the failed release. On first deployment there is
+no previous release; failures require intervention. Migration failures leave current
+unchanged and invalidate the success record, because partial schema changes may
+need intervention. No database downgrade/restore is automatic. Code rollback assumes
+backward-compatible migrations; confirm this before enabling deployment.
+Migration output is captured in mode-0600 server-local logs, not Actions logs.
+Scripts never print SECRET_KEY or backend.env. A failed backend deployment prevents
+frontend deployment via the local success record unless a previous healthy release
+is restored and its SHA matches the selected backend version. Inspect logs and database state before retrying. No automatic database downgrade
+or restore is performed. Retained SQLite backups need a tested restore procedure.
 
-## Runner registration (do not run server commands yet)
+For a compatible rollback, the operator selects a retained release, switches current
+atomically and restarts the exact service (or reloads nginx for frontend), then checks
+health. Backend code rollback requires compatibility with the migrated database.
+Database restoration requires a deliberate decision because newer writes may be lost.
 
-After server approval, create a dedicated non-root account `hrms-runner`; use a
-separate deployment account if the runner is on another machine. Do not run Actions
-as root or grant unrestricted sudo. Limit deployment permissions to the environment
-release folders and the specific systemd service operations needed for deployment.
+## Known issues
 
-In hrms-backend: Settings > Actions > Runners > New self-hosted runner > Linux >
-choose discovered architecture. Run GitHub's displayed download and configuration
-commands as hrms-runner in its own runner directory. Keep the short-lived registration
-token private. During configuration set name `hrms-deploy-188`, accept default
-self-hosted/linux labels, add custom label `hrms-deploy`, and choose a work directory.
-Use GitHub's current runner version rather than copying a stale download URL.
+See FOR_DEVELOPER.md and VALIDATION.md. CI has explicit temporary continue-on-error
+steps; a successful run does not mean those issues are resolved. Frontend audit is
+non-blocking at the owner's request; do not run npm audit fix. Other security checks,
+builds, migrations and non-excepted tests remain blocking. No application changes are
+part of these deployment files. Wildcard CORS is accepted for this internal deployment;
+production uses same-origin /api/v1 and CORS_ORIGINS is unused by application middleware.
 
-An administrator then installs the supplied service with `sudo ./svc.sh install
-hrms-runner`, starts it with `sudo ./svc.sh start`, and checks `sudo ./svc.sh status`.
-Restart from the runner installation directory with `sudo ./svc.sh stop` then
-`sudo ./svc.sh start`. These are future instructions, not commands to run now.
-Confirm the runner is Idle in GitHub. It needs outbound HTTPS to GitHub and artifact
-services; no inbound internet port is required. Keep OS and runner updated, restrict
-repository write access, and never execute untrusted PR code on this machine.
+## Trigger and repository restrictions
 
-## SSH keys (only if deployment crosses machines)
-
-After discovery, generate a dedicated Ed25519 deployment key on a trusted machine.
-Install the public key in the deployment user's ~/.ssh/authorized_keys; keep directory
-permissions 700 and file permissions 600. Store the private key only in the appropriate
-GitHub Environment secret. Verify the server host-key fingerprint through a trusted
-channel before storing known_hosts; never disable host-key checking. Restrict key
-forwarding/PTY and deployment privileges as appropriate. Never share the server password.
-If the runner deploys locally, SSH credentials need not exist at all.
-
-## Daily workflow
-
-```bash
-git checkout develop
-git checkout -b feature/your-task
-# Edit, review git diff and git status, and commit intentionally selected files.
-# Ask for authorization before pushing during this assisted setup.
-git push -u origin feature/your-task
-```
-
-Open a PR into develop, get green CI and review, then merge. A production release
-starts with a reviewed develop-to-main PR. Deployment will be manual, for both
-environments, under the current simplified release policy.
-
-## Troubleshooting
-
-- Lint/format: inspect failing files; do not autoformat application code without approval.
-- Coverage: frontend needs @vitest/coverage-v8 matching the installed Vitest version.
-- Dependency audit: fix findings through reviewed dependency updates, not ignored failures.
-- Migration failure: preserve the backup and logs; do not repeatedly restart against a damaged DB.
-- CORS: wildcard policy is accepted for internal deployment; CORS_ORIGINS is unused
-  by the application CORS middleware. Production uses same-origin /api/v1 via nginx.
-- API errors: verify nginx preserves /api/v1 when forwarding requests.
-- Pending runner: check labels, service status and outbound network access.
-- Missing artifact: confirm successful push CI and retention window; never rebuild during release.
-- Release button absent: workflow_dispatch must be on the repository default branch first.
-- Secret accidentally committed: revoke/rotate it immediately; deletion alone is insufficient.
+Both Release workflows accept only workflow_dispatch and push on develop/main.
+Hosted validation and self-hosted deployment each check the exact original repository,
+reject repository forks, and require refs/heads/develop or refs/heads/main. No
+pull_request, pull_request_target or workflow_run release trigger exists. Checkout
+uses the trusted release-workflow ref, not a PR ref or unvalidated artifact SHA.
+Environment branch restrictions and reviewed workflow changes remain required.
+Protect all workflows: an independently added workflow could otherwise target the
+same runner labels. A successful CI run includes the documented known-issue exceptions.
