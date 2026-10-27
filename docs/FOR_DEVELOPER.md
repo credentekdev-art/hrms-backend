@@ -37,3 +37,11 @@ Frontend @vitest/coverage-v8@2.1.9 is installed and committed separately with it
 lockfile. The owner reports 7 npm audit vulnerabilities, including 3 critical.
 Frontend audit remains visible as a non-blocking known issue pending developer
 triage and reviewed dependency updates. No npm audit fix was run.
+
+## Repository ownership and review
+
+Repository: https://github.com/credentekdev-art/hrms-backend. Baseline main/develop branches are already pushed.
+Runner registration: https://github.com/credentekdev-art/hrms-backend/settings/actions/runners/new.
+The release workflow guards now require credentekdev-art/hrms-backend. Keep the
+fork, event and protected-branch guards. Confirm the exact CODEOWNERS reviewer
+handle and their write access; the PR author cannot approve their own PR.

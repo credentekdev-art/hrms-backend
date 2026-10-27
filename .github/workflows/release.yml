@@ -20,7 +20,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   validate:
-    if: ${{ github.repository == 'gaurav9075/hrms-backend' && !github.event.repository.fork && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') }}
+    if: ${{ github.repository == 'credentekdev-art/hrms-backend' && !github.event.repository.fork && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') }}
     timeout-minutes: 25
     runs-on: ubuntu-24.04
     outputs:
@@ -86,7 +86,7 @@ jobs:
     needs: validate
     runs-on: [self-hosted, linux, hrms-deploy]
     environment: ${{ needs.validate.outputs.target }}
-    if: ${{ needs.validate.result == 'success' && github.repository == 'gaurav9075/hrms-backend' && !github.event.repository.fork && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') }}
+    if: ${{ needs.validate.result == 'success' && github.repository == 'credentekdev-art/hrms-backend' && !github.event.repository.fork && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') }}
     timeout-minutes: 30
     steps:
       - name: Require completed server setup and developer decisions

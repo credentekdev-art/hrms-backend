@@ -73,3 +73,12 @@ Release update: direct server connectivity works; proxy settings are optional.
 Only manual dispatch and develop/main pushes can trigger the guarded release jobs.
 Activation failures attempt automatic previous-release rollback; SQLite is not
 automatically restored/downgraded. Runtime installation remains pending.
+
+## Repository owner update
+
+The owner is credentekdev-art; repository name remains hrms-backend.
+The local origin already points to https://github.com/credentekdev-art/hrms-backend.git.
+The owner reports baseline main/develop branches pushed to this repository.
+Both release-job repository guards now use credentekdev-art/hrms-backend.
+CODEOWNERS reviewer confirmation is required separately. Feature changes have not
+been pushed by this assistant; no server commands were run for this update.

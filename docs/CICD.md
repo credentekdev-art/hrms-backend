@@ -1,5 +1,13 @@
 # HRMS CI/CD and server deployment
 
+Repository: https://github.com/credentekdev-art/hrms-backend
+Runner setup: https://github.com/credentekdev-art/hrms-backend/settings/actions/runners/new
+Baseline main/develop branches have been pushed to the new repository. Feature
+branch changes remain local until separately authorized. Release jobs accept only
+credentekdev-art/hrms-backend; repository-fork, event and branch guards remain active.
+CODEOWNERS must name the explicitly confirmed reviewer with write access; repository
+ownership alone does not select an independent PR reviewer.
+
 ## Approved topology
 
 Server: 192.168.0.188, Ubuntu 20.04, nginx 1.18. System Python remains 3.8.
