@@ -1,0 +1,3 @@
+# Install root-owned, mode 0440, after validating with visudo.
+# Exact commands only. --no-pager prevents a privileged status pager shell escape.
+hrmsdeploy ALL=(root) NOPASSWD: /usr/bin/systemctl restart hrms-backend-staging.service, /usr/bin/systemctl restart hrms-backend-production.service, /usr/bin/systemctl --no-pager status hrms-backend-staging.service, /usr/bin/systemctl --no-pager status hrms-backend-production.service, /usr/bin/systemctl reload nginx.service, /usr/sbin/nginx -t
