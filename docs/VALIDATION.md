@@ -82,3 +82,34 @@ The owner reports baseline main/develop branches pushed to this repository.
 Both release-job repository guards now use credentekdev-art/hrms-backend.
 CODEOWNERS reviewer confirmation is required separately. Feature changes have not
 been pushed by this assistant; no server commands were run for this update.
+
+## Backend PR #1: empty-database migration failure
+
+Owner-reported CI result: Backend CI failed in 33 seconds. Ruff reported 767 E702
+findings and Black would reformat 43 files. Both were already labelled known issues
+with continue-on-error: true. tests/test_cors.py also already had continue-on-error;
+its explicit-origin expectation conflicts with the accepted wildcard setup.
+The blocking failure was Alembic on an empty SQLite database: NoSuchTableError:
+allocations. Migration 20261023_03 inspects allocations indexes, but the migration
+chain does not create the complete original application schema.
+
+Application lifespan first registers ORM models, calls Base.metadata.create_all,
+then apply_local_schema_upgrades, followed by demo bootstrap and optional scheduler.
+CI now invokes only those first two schema operations using existing functions
+before Alembic. It does not enter lifespan, start a server/scheduler, or seed demo data.
+Schema preparation and Alembic stay blocking; no application/migration files changed.
+This checks migration compatibility with startup-created schema, not migrations-only
+creation of the complete schema from zero.
+
+Local Python 3.10 verification used isolated temporary SQLite databases only:
+- Reproduced the original Alembic-only allocations error.
+- On a separate pristine path, schema preparation then upgrade head succeeded.
+- Repeating upgrade head succeeded; the stored revision matched the script head.
+- users remained empty. Existing databases and server were untouched.
+SQLAlchemy reflection warnings were emitted; no full application test run is claimed.
+The reported pinned-action Node.js 20 deprecation remains a warning; action pins
+were not changed in this fix.
+
+Blocking steps remain dependency installation, schema setup/migrations, backend
+suite excluding test_cors.py, pip-audit, Bandit, and source artifact creation/upload.
+Ruff, Black and CORS tests remain the only non-blocking backend checks.

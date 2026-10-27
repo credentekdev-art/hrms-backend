@@ -38,7 +38,19 @@ jobs:
       - name: "Known issues: backend Black"
         continue-on-error: true
         run: black --check .
-      - name: Apply migrations to a fresh test database
+      - name: Prepare fresh CI schema using existing startup functions (blocking)
+        run: |
+          python - <<'PYTHON'
+          from app.core.database import Base, engine
+          from app.models import entities  # Register all ORM tables.
+          from app.core.schema_upgrade import apply_local_schema_upgrades
+
+          assert engine.url.drivername == "sqlite"
+          assert engine.url.database == "/tmp/hrms-ci.sqlite3"
+          Base.metadata.create_all(bind=engine)
+          apply_local_schema_upgrades(engine)
+          PYTHON
+      - name: Apply migrations after startup schema setup (blocking)
         run: python -m alembic upgrade head
       - name: Backend tests (blocking)
         run: python -m pytest --ignore=tests/test_cors.py --cov=app --cov-report=term-missing --cov-report=xml
