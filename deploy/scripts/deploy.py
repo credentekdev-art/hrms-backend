@@ -102,6 +102,14 @@ assert 0 <= int(config["AUTO_DEALLOCATE_HOUR"]) <= 23
 expected = "sqlite:////srv/hrms/" + sys.argv[2] + "/shared/data/hrms.sqlite3"
 assert config["DATABASE_URL"] == expected, "Confirm SQLite path before deploying"
 source = Path("/srv/hrms") / sys.argv[2] / "shared/data/hrms.sqlite3"
+# Do not create or partially migrate a fresh server DB without developer approval.
+if not source.is_file():
+    raise SystemExit("Fresh database requires approved initialisation; see docs/FOR_DEVELOPER.md")
+with sqlite3.connect("file:" + str(source) + "?mode=ro", uri=True) as database:
+    tables = {row[0] for row in database.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+required_tables = {"allocations", "users", "employees", "projects", "resource_requests", "feedback_tasks"}
+if not required_tables.issubset(tables):
+    raise SystemExit("Incomplete base schema: developer-approved initialisation is required before deployment")
 if source.exists():
     destination = source.parent.parent / "backups" / (sys.argv[3] + ".sqlite3")
     assert not destination.exists()

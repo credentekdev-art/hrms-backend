@@ -112,7 +112,9 @@ turns it off for isolated tests. The service loads backend.env; do not echo it.
 Each backend release gets its own .venv at its final release path, built with the
 explicit Python 3.10 interpreter. Release scripts require explicit scheduler values,
 back up existing SQLite through the SQLite backup API, run Alembic, switch current,
-restart systemd and check health. A fresh database has no backup until it exists.
+restart systemd and check health. Fresh or incomplete databases are refused by a read-only deployment preflight.
+Follow the proposed first-install review in FOR_DEVELOPER.md before enabling
+deployment; CI startup-schema preparation does not approve a production baseline.
 Startup still performs create_all/local schema upgrades: developer confirmation and
 a rehearsal on a database copy are required before DEPLOYMENT_READY is enabled.
 The service uses one worker. Determine server timezone and scheduled-job behavior

@@ -113,3 +113,23 @@ were not changed in this fix.
 Blocking steps remain dependency installation, schema setup/migrations, backend
 suite excluding test_cors.py, pip-audit, Bandit, and source artifact creation/upload.
 Ruff, Black and CORS tests remain the only non-blocking backend checks.
+
+## First-deploy SQLite safety follow-up
+
+Reviewed deploy/scripts/deploy.py: it previously ran Alembic directly on a missing
+SQLite DB, before the application's startup table creation could occur. This has
+the same allocations failure as CI. A new read-only preflight refuses missing or
+incomplete base schemas before Alembic. It neither creates a server database nor
+accepts CI's setup sequence as an approved production baseline.
+
+FOR_DEVELOPER.md now asks how a fresh DB must be initialised and documents a proposed
+rehearsal/candidate-DB path, first-admin and scheduler decisions. Keep deployment
+disabled until those decisions are resolved. Existing initialised databases still
+receive SQLite-native backups before migrations; database rollback is not automatic.
+No server, application, test or migration files were modified by this change.
+
+Local deployment preflight verification used temporary SQLite paths and a mocked
+Alembic subprocess: missing DB was refused without creation; empty DB was refused
+without migration; an initialised DB was backed up with its sample row preserved
+before the migration subprocess was invoked. Python syntax and whitespace checks
+passed. These are local checks, not a server deployment or full regression run.
